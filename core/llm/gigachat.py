@@ -1,31 +1,44 @@
-from gigachat import GigaChat
-from gigachat.models import Chat
-import logging
+from langchain_gigachat import GigaChat
+from langchain_core.language_models import BaseLLM
+from langchain_core.outputs import LLMResult
+from typing import List, Optional, Dict, Any
 from config import settings
-from config.models import GIGACHAT_MODELS
+import logging
 
-class GigaChatClient:
-    def __init__(self, model: str):
-        self.model_name = GIGACHAT_MODELS.get(model, GIGACHAT_MODELS['latest'])
-        self._client = None
-        
-    def initialize(self):
+logger = logging.getLogger(__name__)
+
+class GigaChatWrapper(BaseLLM):
+    """Правильная реализация обертки для GigaChat"""
+    
+    _client: Any  # Объявляем поле для клиента
+    
+    def __init__(self, credentials: dict):
+        super().__init__()
+        self._client = GigaChat(
+            credentials=credentials["credentials"],
+            model=credentials.get("model", "GigaChat-2-Max"),
+            verify_ssl_certs=credentials.get("verify_ssl", False),
+            timeout=30
+        )
+    
+    def _generate(
+        self,
+        prompts: List[str],
+        stop: Optional[List[str]] = None,
+        **kwargs
+    ) -> LLMResult:
         try:
-            self._client = GigaChat(
-                model=self.model_name,
-                **settings.GIGACHAT_CREDS
+            response = self._client.invoke(prompts[0])
+            return LLMResult(
+                generations=[[{"text": response}]]
             )
-            self._client.get_models()  # Проверка подключения
         except Exception as e:
-            logging.error(f"GigaChat init failed: {e}")
+            logger.error(f"GigaChat error: {e}")
             raise
     
-    def call(self, prompt: str) -> str:
-        try:
-            response = self._client.chat(
-                Chat(messages=[{"role": "user", "content": prompt}])
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            logging.error(f"GigaChat error: {e}")
-            return f"Ошибка GigaChat: {str(e)}"
+    def _llm_type(self) -> str:
+        return "gigachat"
+    
+    @property
+    def client(self) -> Any:
+        return self._client

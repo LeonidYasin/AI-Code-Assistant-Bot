@@ -1,5 +1,6 @@
 from dataclasses import dataclass
-from core.llm.client import LLMClient
+from typing import Tuple  # Добавьте этот импорт
+from core.llm.client import llm_client
 from core.utils import validate_python_code
 import logging
 
@@ -7,27 +8,31 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class CodeTask:
-    description: str  # "напиши парсер CSV"
-    context: str = "" # Контекст проекта
+    description: str
+    context: str = ""
 
 class PythonGenerator:
-    def __init__(self, llm_client: LLMClient):
-        self.llm = llm_client
+    def __init__(self, llm: llm_client):
+        self.llm = llm
 
-    def generate(self, task: CodeTask) -> tuple[str, str]:
-        """Генерирует код и возвращает (статус, результат)"""
+    def generate(self, task: CodeTask) -> Tuple[bool, str]:
         prompt = f"""
-        Сгенерируй код на Python. Требования:
+        Сгенерируй код на Python по описанию:
         {task.description}
+        
         Контекст проекта:
         {task.context}
-        Код должен быть готов к запуску без доработок.
+        
+        Требования:
+        - Код должен быть полным и готовым к запуску
+        - Используй актуальные версии библиотек
+        - Добавь комментарии к сложным участкам
         """
         
         try:
             code = self.llm.call(prompt, task.context)
             is_valid, error = validate_python_code(code)
-            return ("success", code) if is_valid else ("error", error)
+            return (True, code) if is_valid else (False, error)
         except Exception as e:
-            logger.error(f"Generation failed: {e}")
-            return ("error", f"Ошибка генерации: {str(e)}")
+            logger.error(f"Generation error: {e}")
+            return False, f"Generation failed: {str(e)}"

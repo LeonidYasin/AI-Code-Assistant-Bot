@@ -1,5 +1,5 @@
 import os
-from config import config
+from config import settings  # Новый вариант
 
 
 import re
@@ -7,9 +7,12 @@ import logging
 from typing import Optional
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, filters
-from config import config
+
 from core.llm.client import llm_client
+
 from core.code_generator.python_gen import PythonGenerator, CodeTask
+
+
 from core.project.analyzer import analyze_project
 from core.utils import (
     save_code,

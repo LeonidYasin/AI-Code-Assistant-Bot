@@ -1,6 +1,8 @@
+from config import settings  # Теперь импорт будет работать
 import os
 import logging
-from config import settings
+
+logger = logging.getLogger(__name__)
 
 def analyze_project() -> str:
     context = ""
@@ -18,5 +20,5 @@ def analyze_project() -> str:
         
         return context[:settings.MAX_CONTEXT_LENGTH]
     except Exception as e:
-        logging.error(f"Project analysis error: {e}")
+        logger.error(f"Project analysis error: {e}")
         return ""
