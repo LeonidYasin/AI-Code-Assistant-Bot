@@ -1,0 +1,5 @@
+python-telegram-bot==21.0.1  # Актуальная стабильная версия
+gigachat==0.1.39.post1       # Последняя доступная версия
+python-dotenv==1.0.0
+requests==2.31.0
+typst==0.7.0
