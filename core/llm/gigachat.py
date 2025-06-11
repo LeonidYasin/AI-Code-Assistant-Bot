@@ -28,12 +28,22 @@ class GigaChatWrapper(BaseLLM):
         **kwargs
     ) -> LLMResult:
         try:
+            # Get the response from GigaChat
             response = self._client.invoke(prompts[0])
+            
+            # Extract the content from AIMessage if needed
+            if hasattr(response, 'content'):
+                response_text = response.content
+            elif isinstance(response, str):
+                response_text = response
+            else:
+                response_text = str(response)
+                
             return LLMResult(
-                generations=[[{"text": response}]]
+                generations=[[{"text": response_text, "message": response}]]
             )
         except Exception as e:
-            logger.error(f"GigaChat error: {e}")
+            logger.error(f"GigaChat error: {e}", exc_info=True)
             raise
     
     def _llm_type(self) -> str:

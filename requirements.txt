@@ -1,9 +1,35 @@
-python-telegram-bot==21.0.1  # Актуальная стабильная версия
-gigachat==0.1.39.post1       # Последняя доступная версия
-python-dotenv==1.0.0
-requests==2.31.0
-typst==0.7.0
+# Основные зависимости
+python-telegram-bot>=20.0
+gigachat>=0.1.39
+python-dotenv>=1.0.0
+requests>=2.31.0
+
+# Обработка документов
+typst>=0.7.0
+
+# Интеграция с языковыми моделями
 langchain-core>=0.1.0
-langchain-gigachat>=0.1.0
-#python-telegram-bot>=20.0
-#python-dotenv>=1.0.0
+langchain-gigachat>=0.3.10
+
+# Асинхронное программирование
+asyncio>=3.4.3
+
+# Работа с файлами и путями
+pathlib>=1.0.1
+
+# Логирование
+logging>=0.5.1.2
+
+# Дополнительные утилиты
+python-multipart>=0.0.6  # Для обработки загрузки файлов
+pydantic>=1.10.7  # Для валидации данных
+python-dateutil>=2.8.2  # Для работы с датами
+
+# Для работы с JSON
+ujson>=5.4.0
+
+# Для работы с процессами
+psutil>=5.9.0
+
+# Для работы с асинхронными HTTP-запросами
+aiohttp>=3.8.4

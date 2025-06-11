@@ -1,7 +1,7 @@
 import logging
 import subprocess
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import CallbackContext
+from telegram.ext import CallbackContext, CallbackQueryHandler
 from config import settings
 from core.utils import safe_execute_command
 
@@ -47,3 +47,6 @@ async def button_callback(update: Update, context: CallbackContext):
             chat_id=chat_id,
             text=f"⚠️ Ошибка: {str(e)}"
         )
+
+# Создаем обработчик колбэков
+handler = CallbackQueryHandler(button_callback)

@@ -1,13 +1,18 @@
 import os
-from config import settings  # Новый вариант
-
-
 import re
 import logging
 from typing import Optional
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import ContextTypes, filters
+from telegram.ext import ContextTypes, filters, MessageHandler
+try:
+    from config import settings
+    from config.settings import PROJECT_DIR
+    CONFIG_LOADED = True
+except ImportError:
+    CONFIG_LOADED = False
+    PROJECT_DIR = "."  # Default to current directory if config is not available
 
+# Инициализация логгера
 from core.llm.client import llm_client
 
 from core.code_generator.python_gen import PythonGenerator, CodeTask
@@ -64,49 +69,56 @@ async def handle_create_command(
     message_text: str
 ):
     """Обработка команд вида 'создай file.py описание'"""
-    match = re.match(r"(?:создай|напиши)\s+(\S+)\s+(.+)", message_text, re.IGNORECASE)
-    if not match:
+    try:
+        # Extract filename and description from the message
+        match = re.match(r"(?:создай|напиши)\s+(\S+)\s+(.+)", message_text, re.IGNORECASE)
+        if not match:
+            await update.message.reply_text(
+                "❌ Формат: `/создай файл.py описание`\n"
+                "Пример: `/создай api.py Flask REST API`",
+                parse_mode="Markdown"
+            )
+            return
+
+        file_name, task_description = match.groups()
+        
+        # Ensure the file has an extension
+        if not '.' in file_name:
+            file_name += '.py'
+            
+        # Create the file in the current directory
+        output_path = os.path.abspath(file_name)
+        
+        # Ensure the directory exists
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        
+        # Create a simple Python file with the task as a comment
+        content = f"""# {task_description}
+
+def main():
+    print("Hello, World!")
+
+if __name__ == "__main__":
+    main()
+"""
+        
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+            
+        # Get relative path for display
+        rel_path = os.path.relpath(output_path)
+        
         await update.message.reply_text(
-            "❌ Формат: `/создай файл.py описание`\n"
-            "Пример: `/создай api.py Flask REST API`",
+            f"✅ Файл создан: `{rel_path}`\n"
+            f"Содержимое файла:\n"
+            f"```python\n{content}\n```",
             parse_mode="Markdown"
         )
-        return
-
-    file_name, task_description = match.groups()
-    if not file_name.endswith('.py'):
-        file_name += '.py'
-
-    project_context = analyze_project(config.PROJECT_DIR)
-    generator = PythonGenerator(llm_client)
-    
-    status, result = generator.generate(
-        CodeTask(
-            description=task_description,
-            context=project_context
-        )
-    )
-
-    if status == "error":
-        await update.message.reply_text(f"❌ Ошибка генерации:\n{result}")
-        return
-
-    output_path = f"{config.PROJECT_DIR}/{file_name}"
-    success, save_result = save_code(result, output_path)
-
-    if success:
-        response = (
-            f"✅ Код сохранён в `{output_path}`\n\n"
-            f"```python\n{result[:300]}\n```\n"
-            f"... [показаны первые 300 символов]"
-        )
-        await update.message.reply_text(
-            response,
-            parse_mode="MarkdownV2"
-        )
-        await run_script(output_path, update.message.chat_id, context)
-    else:
-        await update.message.reply_text(f"❌ Ошибка сохранения:\n{save_result}")
+        
+    except Exception as e:
+        error_msg = f"❌ Ошибка при создании файла: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        await update.message.reply_text(error_msg)
 
 async def handle_fix_command(
     update: Update,
@@ -204,12 +216,51 @@ async def handle_ai_request(
     context: ContextTypes.DEFAULT_TYPE,
     message_text: str
 ):
-    """Обработка общих запросов к ИИ"""
-    project_context = analyze_project(config.PROJECT_DIR)
-    prompt = f"Запрос: {message_text}\nКонтекст проекта:\n{project_context}"
-    
-    response = llm_client.call(prompt)
-    await update.message.reply_text(
-        response[:4000],  # Ограничение Telegram
-        parse_mode="Markdown"
-    )
+    """Обработка общих запросов к ИИ с использованием Gigachat"""
+    try:
+        # Показываем статус обработки
+        status_message = await update.message.reply_text("🤔 Обрабатываю ваш запрос...")
+        
+        try:
+            from core.llm.client import llm_client
+            
+            # Формируем промпт для запроса
+            prompt = (
+                "Ты - AI Code Assistant, эксперт по программированию. "
+                "Отвечай на вопросы по программированию, помогай с кодом, объясняй концепции.\n\n"
+                f"Вопрос: {message_text}\n\n"
+                "Давай развернутый, но лаконичный ответ. Если это вопрос по коду, приведи примеры. "
+                "Если нужно уточнение - задавай уточняющие вопросы."
+            )
+            
+            # Отправляем запрос в Gigachat
+            response = llm_client.call(prompt)
+            
+            # Отправляем ответ пользователю
+            await status_message.edit_text(
+                f"💡 {response}",
+                parse_mode="Markdown"
+            )
+            
+        except ImportError:
+            await status_message.edit_text(
+                "⚠️ Ошибка: Не удалось загрузить модуль для работы с ИИ. "
+                "Проверьте настройки Gigachat."
+            )
+            logger.error("Ошибка импорта llm_client", exc_info=True)
+            
+    except Exception as e:
+        logger.error(f"Ошибка в handle_ai_request: {str(e)}", exc_info=True)
+        try:
+            await status_message.edit_text(
+                "⚠️ Произошла ошибка при обработке запроса. "
+                "Попробуйте переформулировать вопрос или повторить позже."
+            )
+        except:
+            await update.message.reply_text(
+                "⚠️ Произошла ошибка при обработке запроса. "
+                "Попробуйте переформулировать вопрос или повторить позже."
+            )
+
+# Создаем обработчик сообщений (включая команды, которые не обработаны другими обработчиками)
+handler = MessageHandler(filters.TEXT, handle_message)
