@@ -12,10 +12,19 @@ logger = logging.getLogger(__name__)
 
 
 class ProjectHandlers:
-    def __init__(self, llm_client):
-        self.llm = llm_client
+    def __init__(self, llm_client_or_factory):
+        # Store either the LLM client directly or a callable that returns it
+        self.llm_factory = llm_client_or_factory if callable(llm_client_or_factory) else lambda: llm_client_or_factory
+        self._llm_client = None if callable(llm_client_or_factory) else llm_client_or_factory
         self.project_managers: Dict[int, ProjectManager] = {}
         self.project_ais: Dict[int, ProjectAI] = {}
+
+    @property
+    def llm(self):
+        """Lazy-load the LLM client when first accessed"""
+        if self._llm_client is None:
+            self._llm_client = self.llm_factory()
+        return self._llm_client
 
     def get_project_manager(self, chat_id: int) -> ProjectManager:
         """Get or create project manager for chat"""
@@ -66,15 +75,57 @@ class ProjectHandlers:
                     await self._handle_project_switch(update, context, args[1])
                 elif args[0].lower() == "list":
                     # Handle project list command
-                    projects = self.get_project_manager(chat_id).list_projects()
+                    success, projects = self.get_project_manager(chat_id).list_projects()
+                    if not success:
+                        await update.message.reply_text(f"❌ Ошибка при получении списка проектов: {projects}")
+                        return
+                        
+                    # Debug: Print raw projects data with full details
+                    print("\n" + "="*50)
+                    print("[DEBUG] Raw projects data:")
+                    for i, p in enumerate(projects, 1):
+                        print(f"{i}. {p.get('name')} (path: {p.get('path')}, "
+                              f"has_config: {p.get('has_config', False)}, "
+                              f"is_current: {p.get('is_current', False)})")
+                    print("="*50 + "\n")
+                    
                     if not projects:
-                        response = "ℹ️ У вас пока нет созданных проектов."
+                        response = "ℹ️ В директории проектов пока нет папок."
                     else:
-                        response = "📂 Ваши проекты:\n" + "\n".join([
-                            f"- {i+1}. {p['name']} (путь: {p['path']})" 
-                            for i, p in enumerate(projects)
-                        ])
-                    await update.message.reply_text(response)
+                        response = ["📂 <b>Список проектов:</b>"]
+                        for i, project in enumerate(projects, 1):
+                            try:
+                                project_info = []
+                                status = "✅" if project.get('is_current') else "  "
+                                
+                                # Add project name and status
+                                project_line = f"<b>{i}.</b> {status} <b>{project['name']}</b>"
+                                
+                                # Add size and file count if available
+                                if 'size' in project and 'file_count' in project:
+                                    file_word = self._format_file_count(project['file_count'])
+                                    project_line += f"\n   📊 <i>{project['size']}, {project['file_count']} {file_word}</i>"
+                                
+                                # Add warning if no config file
+                                if not project.get('has_config', False):
+                                    project_line += "\n   ⚠️ <i>Без конфигурации</i>"
+                                
+                                # Add path
+                                project_line += f"\n   📁 <code>{project['path']}</code>"
+                                
+                                response.append(project_line)
+                            except Exception as e:
+                                error_msg = f"[ERROR] Error formatting project {project.get('name')}: {e}"
+                                print(error_msg)
+                                response.append(f"❌ Ошибка при отображении проекта: {project.get('name', 'Неизвестный')}")
+                        
+                        response = "\n\n".join(response)
+                    
+                    await update.message.reply_text(
+                        response,
+                        parse_mode='HTML',
+                        disable_web_page_preview=True
+                    )
                 else:
                     await update.message.reply_text("❌ Неверная команда проекта. Используйте /help для справки.")
             elif command == "/list":
@@ -90,6 +141,15 @@ class ProjectHandlers:
             logger.error(f"Error in project command {command}: {e}", exc_info=True)
             await update.message.reply_text(f"⚠️ Произошла ошибка: {str(e)}")
 
+    def _format_file_count(self, count: int) -> str:
+        """Return the correct Russian word form for file count"""
+        if count % 10 == 1 and count % 100 != 11:
+            return "файл"
+        elif 2 <= count % 10 <= 4 and (count % 100 < 10 or count % 100 >= 20):
+            return "файла"
+        else:
+            return "файлов"
+            
     async def _log_bot_response(self, chat_id: int, message: str) -> None:
         """Log bot response to console"""
         logger.info(f"[BOT RESPONSE to {chat_id}]\n{message}")
@@ -487,32 +547,56 @@ class ProjectHandlers:
             await update.message.reply_text(f"Произошла ошибка при анализе кода: {str(e)}")
     
     async def _handle_analyze_project(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Analyze the current project structure and contents"""
-        # Check if running in CLI mode (update is None or doesn't have effective_chat)
-        is_cli = update is None or not hasattr(update, 'effective_chat')
+        """Analyze the current project structure and contents.
         
-        if is_cli:
-            chat_id = 0
-            reply_func = print
-        else:
-            chat_id = update.effective_chat.id
-            reply_func = update.message.reply_text
-            
-        project_manager = self.get_project_manager(chat_id)
-        
-        if not project_manager.current_project:
-            error_msg = "❌ Сначала выберите проект с помощью /project switch <имя_проекта>"
-            await reply_func(error_msg) if not is_cli else print(error_msg)
-            return (False, error_msg) if is_cli else None
-            
+        Supports both registered projects and direct paths.
+        If context.args is provided and contains a path, it will be used for analysis.
+        """
         try:
-            # Get project path
-            project_path = project_manager.get_project_path(project_manager.current_project)
-            if not project_path or not project_path.exists():
-                error_msg = f"❌ Не удалось найти директорию проекта: {project_path}"
-                await reply_func(error_msg) if not is_cli else print(error_msg)
-                return (False, error_msg) if is_cli else None
+            # Check if running in CLI mode (update is None or doesn't have effective_chat)
+            is_cli = update is None or not hasattr(update, 'effective_chat')
+            
+            if is_cli:
+                chat_id = 0
+                reply_func = print
+            else:
+                chat_id = update.effective_chat.id
+                reply_func = update.message.reply_text
+            
+            project_manager = self.get_project_manager(chat_id)
+            project_path = None
+            project_name = None
+            
+            # Check if we have a direct path from context.args
+            if context.args and len(context.args) > 0:
+                potential_path = ' '.join(context.args).strip('"\'')
+                potential_path = Path(potential_path).resolve()
                 
+                if potential_path.exists() and potential_path.is_dir():
+                    project_path = potential_path
+                    project_name = project_path.name
+                    logger.info(f"Analyzing direct project path: {project_path}")
+            
+            # If no direct path, use current project
+            if not project_path:
+                if not project_manager.current_project:
+                    error_msg = (
+                        "❌ Не выбран проект. Используйте:\n"
+                        "/project switch <имя_проекта>\n"
+                        "Или укажите путь к проекту: /analyze_project /путь/к/проекту"
+                    )
+                    await reply_func(error_msg) if not is_cli else print(error_msg)
+                    return (False, error_msg) if is_cli else None
+                    
+                project_name = project_manager.current_project
+                project_path = project_manager.get_project_path(project_name)
+                logger.info(f"Analyzing registered project: {project_name} at {project_path}")
+                
+                if not project_path or not project_path.exists():
+                    error_msg = f"❌ Не удалось найти директорию проекта: {project_path}"
+                    await reply_func(error_msg) if not is_cli else print(error_msg)
+                    return (False, error_msg) if is_cli else None
+            
             # Initialize project analyzer
             from core.project.analyzer import ProjectAnalyzer
             analyzer = ProjectAnalyzer(project_path)
@@ -522,7 +606,7 @@ class ProjectHandlers:
             
             # Format results
             response = (
-                f"📊 *Анализ проекта: {project_manager.current_project}*\n\n"
+                f"📊 *Анализ проекта: {project_name or project_path.name}*\n\n"
                 f"📂 *Директория:* `{project_path}`\n"
                 f"📝 *Всего файлов:* {analysis.get('total_files', 0)}\n"
                 f"📦 *Размер проекта:* {self._format_size(analysis.get('total_size', 0))}\n\n"
@@ -559,10 +643,7 @@ class ProjectHandlers:
                         chunks.append(current_chunk)
                         current_chunk = paragraph
                     else:
-                        if current_chunk:
-                            current_chunk += '\n\n' + paragraph
-                        else:
-                            current_chunk = paragraph
+                        current_chunk = '\n\n'.join([current_chunk, paragraph]) if current_chunk else paragraph
                 
                 if current_chunk:
                     chunks.append(current_chunk)
@@ -575,6 +656,8 @@ class ProjectHandlers:
                     )
             else:
                 await reply_func(response, parse_mode="Markdown")
+            
+            return None
                 
         except Exception as e:
             error_msg = f"❌ Не удалось проанализировать проект. Ошибка: {str(e)}"

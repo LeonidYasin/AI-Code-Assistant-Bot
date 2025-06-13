@@ -31,14 +31,20 @@ class BotApplication:
             cls._instance = super(BotApplication, cls).__new__(cls)
         return cls._instance
     
-    def __init__(self, token: str = None):
+    def __init__(self, token: str = None, cli_mode: bool = False):
         """Initialize the bot application.
         
         Args:
             token: Telegram bot token. If not provided, will be taken from config.
+            cli_mode: If True, initialize in CLI mode without requiring a bot token.
         """
         if not BotApplication._initialized:
-            self.token = token or BOT_TOKEN
+            if cli_mode:
+                # In CLI mode, we don't need a real bot token
+                self.token = "cli_mode"
+            else:
+                self.token = token or BOT_TOKEN
+            
             self.app: Optional[TelegramApplication] = None
             self._handlers: List[HandlerType] = []
             self._commands: Dict[str, CommandCallback] = {}

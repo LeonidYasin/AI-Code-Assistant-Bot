@@ -42,6 +42,10 @@ class CLIRunner:
                 help_text="Show this help message"
             )
         )
+        
+        # Register custom commands
+        from core.bot.cli_commands import register_cli_commands
+        register_cli_commands(self)
     
     def register_command(self, command: CLICommand) -> None:
         """Register a CLI command."""

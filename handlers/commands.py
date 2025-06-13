@@ -269,6 +269,98 @@ async def analyze_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> st
         error_details = f"\n\nОшибка: {str(e)}\n\nДетали:\n{traceback.format_exc()}"
         return f"❌ Ошибка при анализе файла: {file_path}{error_details}"
 
+async def _analyze_project_directly(project_path: str) -> Tuple[bool, str]:
+    """Прямой анализ проекта без использования NLP-процессора"""
+    from pathlib import Path
+    from core.project.analyzer import ProjectAnalyzer
+    
+    try:
+        # Преобразуем в абсолютный путь
+        project_path = Path(project_path).resolve()
+        if not project_path.exists():
+            return False, f"❌ Путь не существует: {project_path}"
+            
+        # Анализируем проект напрямую
+        analyzer = ProjectAnalyzer(project_path)
+        analysis = analyzer.analyze_project()
+        
+        if 'error' in analysis:
+            return False, f"❌ Ошибка при анализе: {analysis['error']}"
+            
+        # Формируем отчет
+        project_name = project_path.name
+        stats = analysis.get('stats', {})
+        
+        response = [
+            f"📊 *Анализ проекта: {project_name}*",
+            f"📂 Путь: `{project_path}`\n"
+        ]
+        
+        # Добавляем статистику, если есть
+        if stats:
+            response.extend([
+                "*📊 Статистика:*",
+                f"• Всего файлов: {stats.get('total_files', 0)}",
+                f"• Общий размер: {_format_size(stats.get('total_size', 0))}",
+                f"• Количество директорий: {stats.get('dir_count', 0)}"
+            ])
+        
+        # Добавляем структуру проекта, если есть
+        if 'structure' in analysis and analysis['structure']:
+            response.append("\n*📁 Структура проекта:*")
+            response.append(_format_structure(analysis['structure']))
+        
+        # Добавляем рекомендации, если есть
+        if 'summary' in analysis and analysis['summary']:
+            summary = analysis['summary']
+            response.extend([
+                "\n*🔍 Анализ проекта:*",
+                f"• *Тип проекта:* {summary.get('project_type', 'Не определен')}",
+                f"• *Дата изменения:* {summary.get('modified_date', 'Неизвестно')}",
+                "\n*📌 Рекомендации по развитию:*"
+            ])
+            
+            recommendations = []
+            if not summary.get('has_readme', False):
+                recommendations.append("• Добавьте файл README.md с описанием проекта")
+            if not summary.get('has_license', False):
+                recommendations.append("• Добавьте файл LICENSE с лицензией")
+            if not any(f.get('has_tests', False) for f in analysis.get('files', [])):
+                recommendations.append("• Добавьте тесты для улучшения качества кода")
+            if not summary.get('has_gitignore', False):
+                recommendations.append("• Добавьте .gitignore файл для игнорирования временных файлов")
+                
+            response.extend(recommendations if recommendations else ["• Отличная работа! Проект хорошо структурирован."])
+        
+        return True, "\n".join(response)
+        
+    except Exception as e:
+        return False, f"❌ Ошибка при анализе проекта: {str(e)}"
+
+def _format_size(size_bytes: int) -> str:
+    """Форматирует размер в байтах в читаемый вид"""
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if size_bytes < 1024.0:
+            return f"{size_bytes:.1f} {unit}"
+        size_bytes /= 1024.0
+    return f"{size_bytes:.1f} TB"
+
+def _format_structure(node: dict, level: int = 0) -> str:
+    """Форматирует структуру проекта в читаемый вид"""
+    indent = '  ' * level
+    result = []
+    
+    if node.get('type') == 'directory':
+        result.append(f"{indent}📁 {node.get('name', '')}/")
+        for child in node.get('children', [])[:5]:  # Показываем первые 5 элементов
+            result.append(_format_structure(child, level + 1))
+        if len(node.get('children', [])) > 5:
+            result.append(f"{indent}  ... и ещё {len(node['children']) - 5} элементов")
+    elif node.get('type') == 'file':
+        result.append(f"{indent}📄 {node.get('name', '')}")
+    
+    return '\n'.join(result)
+
 @command_handler
 async def analyze_project_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
@@ -276,19 +368,31 @@ async def analyze_project_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     Использование:
     /analyze_project - анализ текущего активного проекта
+    /analyze_project project_name - анализ указанного проекта
+    /analyze_project /path/to/project - анализ проекта по указанному пути
     """
     try:
-        # Get the chat ID
-        chat_id = update.effective_chat.id
+        # Get the project path from arguments if provided
+        project_path = ' '.join(context.args).strip() if context.args else None
         
-        # Set chat_id in context for NLP processor
-        context._chat_id = chat_id
-        
-        # Get the NLP processor
-        from handlers.nlp_processor import nlp_processor
-        
-        # Call the analyze_project handler
-        success, result = await nlp_processor._handle_analyze_project(context)
+        # If no path provided, use the current project
+        if not project_path:
+            from handlers.nlp_processor import nlp_processor
+            success, result = await nlp_processor._handle_analyze_project(update, context)
+        else:
+            # Check if the argument is a direct path
+            from pathlib import Path
+            potential_path = Path(project_path).expanduser().resolve()
+            
+            if potential_path.exists() and potential_path.is_dir():
+                # Analyze the directory directly
+                success, result = await _analyze_project_directly(str(potential_path))
+            else:
+                # Not a valid path, treat as project name
+                from handlers.nlp_processor import nlp_processor
+                # Pass the project name as an argument
+                context.args = [project_path]
+                success, result = await nlp_processor._handle_analyze_project(update, context)
         
         # Send the result to the user
         if success:
@@ -297,7 +401,10 @@ async def analyze_project_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
             if len(result) > max_length:
                 parts = [result[i:i+max_length] for i in range(0, len(result), max_length)]
                 for i, part in enumerate(parts, 1):
-                    await update.message.reply_text(f"{part} (часть {i}/{len(parts)})", parse_mode='Markdown')
+                    await update.message.reply_text(
+                        f"*[Часть {i}/{len(parts)}]*\n{part}",
+                        parse_mode='Markdown'
+                    )
             else:
                 await update.message.reply_text(result, parse_mode='Markdown')
         else:

@@ -32,17 +32,17 @@ class GigaChatWrapper(BaseLLM):
         super().__init__()
         # Get model from credentials with fallback to GigaChat-Lite
         self.model = credentials.get("model", "GigaChat-Lite")
-        print(f"\n[GigaChat] 🔍 INITIALIZING WITH MODEL: {self.model}")
-        print(f"[GigaChat] 📋 Credentials keys: {list(credentials.keys())}")
+        print(f"\n[GigaChat] [INIT] Initializing with model: {self.model}")
+        print(f"[GigaChat] [KEYS] Credentials keys: {list(credentials.keys())}")
         
         # Log non-sensitive credentials info
         creds_info = {k: '***' if k == 'credentials' else v 
                      for k, v in credentials.items() 
                      if k != 'credentials'}
-        print(f"[GigaChat] ⚙️  Config: {creds_info}")
+        print(f"[GigaChat] [CFG] Config: {creds_info}")
         
         try:
-            print(f"[GigaChat] 🚀 Creating GigaChat client...")
+            print(f"[GigaChat] [CLIENT] Creating GigaChat client...")
             self._client = GigaChat(
                 credentials=credentials.get("credentials"),
                 model=self.model,  # Use the model from config
@@ -58,16 +58,16 @@ class GigaChatWrapper(BaseLLM):
             
             # Log successful initialization with model info
             actual_model = getattr(self._client, 'model', 'unknown')
-            print(f"[GigaChat] ✅ Successfully initialized with model: {actual_model}")
-            print(f"[GigaChat] 🔗 Client class: {self._client.__class__.__name__}")
+            print(f"[GigaChat] [OK] Successfully initialized with model: {actual_model}")
+            print(f"[GigaChat] [INFO] Client class: {self._client.__class__.__name__}")
             
             # Log available models if possible
             if hasattr(self._client, 'get_models'):
                 try:
-                    print("[GigaChat] 🔄 Fetching available models...")
+                    print("[GigaChat] [STATUS] Fetching available models...")
                     models = self._client.get_models()
                     if hasattr(models, 'data') and models.data:
-                        print("[GigaChat] 📊 Available models:")
+                        print("[GigaChat] [MODELS] Available models:")
                         for m in models.data:
                             print(f"  - {getattr(m, 'id', 'unknown')} "
                                   f"(owned_by: {getattr(m, 'owned_by', 'N/A')})")
@@ -130,10 +130,29 @@ class GigaChatWrapper(BaseLLM):
                     if usage_info.get('precached_prompt_tokens', 0) > 0:
                         logger.info(f"  Precached prompt tokens: {usage_info.get('precached_prompt_tokens', 0)}")
                 
-                # Extract the response content
-                response_content = str(response)
+                # Extract the response content more carefully
+                response_content = None
+                if hasattr(response, 'content'):
+                    response_content = response.content
+                elif hasattr(response, 'choices') and len(response.choices) > 0:
+                    # Handle case where response has choices with messages
+                    choice = response.choices[0]
+                    if hasattr(choice, 'message') and hasattr(choice.message, 'content'):
+                        response_content = choice.message.content
                 
-                # Format response for logging
+                # Fallback to string representation if content not found
+                if response_content is None:
+                    response_content = str(response)
+                
+                # Log the raw response for debugging
+                logger.debug(f"Raw response content type: {type(response_content).__name__}")
+                logger.debug(f"Raw response content: {response_content[:500]}...")
+                
+                # Format response for logging (truncate content if too long)
+                log_content = response_content
+                if len(log_content) > 500:
+                    log_content = log_content[:500] + "..."
+                
                 response_info = {
                     "model": model_info,
                     "object": "chat.completion",
@@ -142,9 +161,9 @@ class GigaChatWrapper(BaseLLM):
                     "choices": [{
                         "message": {
                             "role": "assistant",
-                            "content": response_content
+                            "content": log_content
                         },
-                        "finish_reason": "stop",
+                        "finish_reason": getattr(response.choices[0], 'finish_reason', 'stop') if hasattr(response, 'choices') and len(response.choices) > 0 else 'stop',
                         "index": 0
                     }]
                 }

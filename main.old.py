@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+"""
+Main entry point for the AI Code Assistant bot.
+
+This module initializes the bot and sets up all command handlers.
+"""
+import asyncio
+import logging
+import sys
+from pathlib import Path
+
+# Add the project root to the Python path
+project_root = str(Path(__file__).parent.absolute())
+sys.path.insert(0, project_root)
+
+# Configure basic logging first
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger(__name__)
+
+# Import CLI utilities
+from core.cli import (
+    is_cli_command,
+    is_simple_project_command,
+    process_cli_command,
+    process_async_cli_command,
+    get_help_text,
+    should_show_help
+)
+
+def show_cli_help():
+    """Display CLI help information."""
+    print(get_help_text())
+
+def run():
+    """Run the application."""
+    try:
+        # Set up console encoding
+        from core.utils.encoding_utils import setup_console_encoding, configure_logging
+        setup_console_encoding()
+        configure_logging()
+        
+        # Check if we should show help
+        if should_show_help():
+            show_cli_help()
+            return 0
+        
+        # Check if we're running a CLI command
+        if is_cli_command():
+            # For simple project commands, use the sync version
+            if is_simple_project_command():
+                return process_cli_command()
+            # For other commands, use the async version
+            else:
+                return asyncio.run(process_async_cli_command())
+        
+        # Otherwise, run the bot
+        try:
+            from core.bot.application import BotApplication
+            bot = BotApplication()
+            bot.run()
+            return 0
+        except Exception as e:
+            logger.error(f"Error starting bot: {e}", exc_info=True)
+            return 1
+            
+    except KeyboardInterrupt:
+        print("\n👋 Goodbye!")
+        return 0
+    except Exception as e:
+        logger.error(f"Unhandled error: {e}", exc_info=True)
+        return 1
+
+def main():
+    """Main entry point for the application."""
+    try:
+        return run()
+    except KeyboardInterrupt:
+        print("\n👋 Goodbye!")
+        return 0
+    except Exception as e:
+        logger.error(f"Unhandled error: {e}", exc_info=True)
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(run())
+            encoding='utf-8', 
+            errors='replace',
+            line_buffering=True
+        )
+    
+    # Show help if needed
+    if should_show_help():
+        show_cli_help()
+        return 0
+    
+    # Check version
+    if '--version' in sys.argv or '-v' in sys.argv:
+        from core import __version__
+        print(f"AI Code Assistant v{__version__}")
+        return 0
+    
+    # Handle CLI mode
+    if len(sys.argv) > 1:
+        # For CLI commands, initialize bot in CLI mode
+        from core.bot.application import BotApplication
+        from core.project.manager import ProjectManager
+        bot = BotApplication(cli_mode=True)
+        # Initialize project manager for CLI
+        project_manager = ProjectManager(llm_enabled=False)
+        # Store project manager in bot's bot_data
+        bot.bot_data['project_manager'] = project_manager
+        return await process_cli_command(bot)
+    
+    # If no arguments and not in help mode, default to showing help
+    show_cli_help()
+    return 0
+
+def run():
+    try:
+        # Check for simple CLI commands that don't need full async setup
+        simple_commands = ['/list_project', 'project', '--help', '-h', '--version', '-v']
+        if len(sys.argv) > 1 and any(cmd in sys.argv[1].lower() for cmd in simple_commands):
+            return process_cli_command()
+            
+        # For other commands, use async event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(main())
+    except KeyboardInterrupt:
+        print("\nBot stopped by user")
+        return 0
+    except Exception as e:
+        logger.critical(f"Unhandled exception: {e}", exc_info=True)
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(run())

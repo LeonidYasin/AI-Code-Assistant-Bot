@@ -6,6 +6,9 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, List
 from telegram import Update
 from telegram.ext import ContextTypes
+
+# Import encoding utilities
+from core.utils.encoding_utils import safe_print
 from core.llm.client import llm_client
 
 logger = logging.getLogger(__name__)
@@ -28,117 +31,110 @@ class NLPProcessor:
     
     async def process_command(self, text: str, context: ContextTypes.DEFAULT_TYPE) -> Tuple[bool, str]:
         """Process natural language command and return (success, response)"""
+        # Initialize bot_data if it's a dictionary (CLI mode)
+        if not hasattr(context, 'bot_data') or context.bot_data is None:
+            context.bot_data = {}
+        
+        # Initialize active_projects in bot_data if it doesn't exist
+        if 'active_projects' not in context.bot_data:
+            context.bot_data['active_projects'] = {}
+        
+        # Get or initialize project manager
+        if 'project_manager' not in context.bot_data:
+            from core.project.manager import ProjectManager
+            base_dir = Path(__file__).parent.parent.absolute()
+            context.bot_data['project_manager'] = ProjectManager(base_dir)
+        
+        # Get chat ID or use default for CLI
+        chat_id = getattr(context, '_chat_id', 0)
+        chat_id_str = str(chat_id)
+        
+        # Initialize active projects in instance if needed
+        if not hasattr(self, '_active_projects'):
+            self._active_projects = {}
+        
+        # Sync active projects between context and instance
+        if chat_id_str in context.bot_data['active_projects']:
+            self._active_projects[chat_id_str] = context.bot_data['active_projects'][chat_id_str]
+        elif chat_id_str in self._active_projects:
+            context.bot_data['active_projects'][chat_id_str] = self._active_projects[chat_id_str]
+        
+        # Sync with project manager's current project
+        project_manager = context.bot_data['project_manager']
+        if project_manager.current_project and chat_id_str not in context.bot_data['active_projects']:
+            context.bot_data['active_projects'][chat_id_str] = project_manager.current_project
+            self._active_projects[chat_id_str] = project_manager.current_project
+        
+        current_project = self._active_projects.get(chat_id_str)
         try:
-            # Initialize bot_data if it's a dictionary (CLI mode)
-            if not hasattr(context, 'bot_data') or context.bot_data is None:
-                context.bot_data = {}
-            
-            # Initialize active_projects in bot_data if it doesn't exist
-            if 'active_projects' not in context.bot_data:
-                context.bot_data['active_projects'] = {}
-            
-            # Get or initialize project manager
-            if 'project_manager' not in context.bot_data:
-                from core.project.manager import ProjectManager
-                base_dir = Path(__file__).parent.parent.absolute()
-                context.bot_data['project_manager'] = ProjectManager(base_dir)
-            
-            # Get chat ID or use default for CLI
-            chat_id = getattr(context, '_chat_id', 0)
-            chat_id_str = str(chat_id)
-            
-            # Initialize active projects in instance if needed
-            if not hasattr(self, '_active_projects'):
-                self._active_projects = {}
-            
-            # Sync active projects between context and instance
-            if chat_id_str in context.bot_data['active_projects']:
-                self._active_projects[chat_id_str] = context.bot_data['active_projects'][chat_id_str]
-            elif chat_id_str in self._active_projects:
-                context.bot_data['active_projects'][chat_id_str] = self._active_projects[chat_id_str]
-            
-            # Sync with project manager's current project
-            project_manager = context.bot_data['project_manager']
-            if project_manager.current_project and chat_id_str not in context.bot_data['active_projects']:
-                context.bot_data['active_projects'][chat_id_str] = project_manager.current_project
-                self._active_projects[chat_id_str] = project_manager.current_project
-            
-            current_project = self._active_projects.get(chat_id_str)
             logger.info(f"Processing natural language input: {text}")
             logger.info(f"Current project for chat {chat_id}: {current_project}")
             logger.debug(f"Project manager current project: {project_manager.current_project}")
             logger.debug(f"Active projects in context: {context.bot_data['active_projects']}")
-            logger.debug(f"Active projects: {context.bot_data['active_projects']}")
+        except UnicodeEncodeError:
+            # Fallback to safe_print if logging fails
+            safe_print(f"[INFO] Processing natural language input: {text}")
+            safe_print(f"[INFO] Current project for chat {chat_id}: {current_project}")
             
-            # Prepare the prompt for the LLM
-            prompt = self._build_prompt(text, current_project)
+        # Prepare the prompt for the LLM
+        prompt = self._build_prompt(text, current_project)
+        
+        # Show the prompt being sent to AI
+        prompt_display = f"🤖 Отправляю запрос в ИИ:\n```\n{prompt}\n```"
+        await self._send_message(context, prompt_display)
+        
+        # Get response from LLM
+        try:
+            response = llm_client.call(prompt, is_json=True)
             
-            # Show the prompt being sent to AI
-            prompt_display = f"🤖 Отправляю запрос в ИИ:\n```\n{prompt}\n```"
-            await self._send_message(context, prompt_display)
+            # Convert response to string for analysis
+            response_str = str(response).lower()
             
-            # Get response from LLM
+            # Check for payment required errors in the response
+            payment_indicators = [
+                'требуется подписка', 'payment required', '402', 
+                'gigachat.exceptions.responseerror', 'subscription required',
+                'оплата подписки', 'требуется оплата'
+            ]
+            
+            # Check if this is a payment error
+            if any(indicator in response_str for indicator in payment_indicators):
+                payment_msg = (
+                    "🔴 *ОШИБКА: ТРЕБУЕТСЯ ОПЛАТА ПОДПИСКИ*\n\n"
+                    "Для использования функций ИИ требуется активная подписка на GigaChat.\n\n"
+                    "*ЧТО НУЖНО СДЕЛАТЬ:*\n"
+                    "1. Перейдите на сайт GigaChat: https://developers.sber.ru/portal/login\n"
+                    "2. Войдите в свой аккаунт\n"
+                    "3. Проверьте статус подписки в личном кабинете\n"
+                    "4. При необходимости оформите или продлите подписку\n\n"
+                    "*ДОПОЛНИТЕЛЬНАЯ ИНФОРМАЦИЯ:*\n"
+                    "• Тарифы и условия: https://developers.sber.ru/portal/products/gigachat\n"
+                    "• Поддержка: https://developers.sber.ru/portal/support"
+                )
+                await self._send_message(context, payment_msg)
+                return False, "Требуется оплата подписки GigaChat"
+            
+            # If not a payment error, show the response preview
+            response_preview = str(response)[:300] + ('...' if len(str(response)) > 300 else '')
+            response_display = f"📩 Получен ответ от ИИ (предпросмотр):\n```\n{response_preview}\n```"
+            await self._send_message(context, response_display)
+            
+            # Try to parse the response as JSON
             try:
-                response = llm_client.call(prompt, is_json=True)
+                command_data = json.loads(response)
+                command = command_data.get('command')
+                params = command_data.get('params', {})
                 
-                # Convert response to string for analysis
-                response_str = str(response).lower()
+                # Show parsed command information
+                command_info = (
+                    f"🔍 Распознана команда: `{command}`\n"
+                    f"📋 Параметры:\n```json\n{json.dumps(params, indent=2, ensure_ascii=False)}\n```"
+                )
+                await self._send_message(context, command_info)
                 
-                # Check for payment required errors in the response
-                payment_indicators = [
-                    'требуется подписка', 'payment required', '402', 
-                    'gigachat.exceptions.responseerror', 'subscription required',
-                    'оплата подписки', 'требуется оплата'
-                ]
-                
-                # Check if this is a payment error
-                if any(indicator in response_str for indicator in payment_indicators):
-                    payment_msg = (
-                        "🔴 *ОШИБКА: ТРЕБУЕТСЯ ОПЛАТА ПОДПИСКИ*\n\n"
-                        "Для использования функций ИИ требуется активная подписка на GigaChat.\n\n"
-                        "*ЧТО НУЖНО СДЕЛАТЬ:*\n"
-                        "1. Перейдите на сайт GigaChat: https://developers.sber.ru/portal/login\n"
-                        "2. Войдите в свой аккаунт\n"
-                        "3. Проверьте статус подписки в личном кабинете\n"
-                        "4. При необходимости оформите или продлите подписку\n\n"
-                        "*ДОПОЛНИТЕЛЬНАЯ ИНФОРМАЦИЯ:*\n"
-                        "• Тарифы и условия: https://developers.sber.ru/portal/products/gigachat\n"
-                        "• Поддержка: https://developers.sber.ru/portal/support"
-                    )
-                    await self._send_message(context, payment_msg)
-                    return False, "Требуется оплата подписки GigaChat"
-                
-                # If not a payment error, show the response preview
-                response_preview = str(response)[:300] + ('...' if len(str(response)) > 300 else '')
-                response_display = f"📩 Получен ответ от ИИ (предпросмотр):\n```\n{response_preview}\n```"
-                await self._send_message(context, response_display)
-                
-                # Try to parse the response as JSON
-                try:
-                    command_data = json.loads(response)
-                    command = command_data.get('command')
-                    params = command_data.get('params', {})
-                    
-                    # Show parsed command information
-                    command_info = (
-                        f"🔍 Распознана команда: `{command}`\n"
-                        f"📋 Параметры:\n```json\n{json.dumps(params, indent=2, ensure_ascii=False)}\n```"
-                    )
-                    await self._send_message(context, command_info)
-                    
-                    if not command or command not in self.command_map:
-                        error_msg = f"❌ Неизвестная команда: {command}"
-                        logger.error(error_msg)
-                        await self._send_message(context, error_msg)
-                        return False, error_msg
-                        
-                except json.JSONDecodeError as e:
-                    error_msg = (
-                        "❌ Ошибка: Некорректный формат ответа от ИИ\n\n"
-                        "Попробуйте переформулировать запрос. Если ошибка повторяется, "
-                        "возможно, возникли проблемы с подключением к сервису ИИ."
-                    )
-                    logger.error(f"JSON decode error: {e}")
+                if not command or command not in self.command_map:
+                    error_msg = f"❌ Неизвестная команда: {command}"
+                    logger.error(error_msg)
                     await self._send_message(context, error_msg)
                     return False, error_msg
                 
@@ -153,41 +149,68 @@ class NLPProcessor:
                     await self._send_message(context, msg)
                     return False, msg
                 
-                # Execute the command
-                logger.info(f"Executing command: {command} with params: {params}")
-                execution_msg = f"⚡ Выполняю команду `{command}`..."
-                await self._send_message(context, execution_msg)
+                # Execute the command if it exists
+                if command in self.command_map:
+                    try:
+                        logger.info(f"Executing command: {command} with params: {params}")
+                        execution_msg = f"⚡ Выполняю команду `{command}`..."
+                        await self._send_message(context, execution_msg)
+                        
+                        result = await self.command_map[command](context, **params)
+                        
+                        # Format the result message
+                        if isinstance(result, tuple) and len(result) == 2:
+                            success, message = result
+                            result_msg = f"✅ {message}" if success else f"❌ {message}"
+                        else:
+                            success = True
+                            result_msg = "✅ Команда выполнена успешно"
+                        
+                        await self._send_message(context, result_msg)
+                        
+                        # Log without emojis to avoid encoding issues
+                        if isinstance(result, tuple) and len(result) == 2:
+                            log_success, log_message = result
+                            try:
+                                logger.info(f"Command completed - Success: {log_success}, Message: {log_message}")
+                            except UnicodeEncodeError:
+                                safe_print(f"[INFO] Command completed - Success: {log_success}")
+                                safe_print(f"[MESSAGE] {log_message}")
+                        
+                        return success, result_msg
+                        
+                    except Exception as e:
+                        error_msg = f"❌ Ошибка при выполнении команды: {str(e)}"
+                        logger.error(error_msg, exc_info=True)
+                        await self._send_message(context, error_msg)
+                        return False, error_msg
                 
-                result = await self.command_map[command](context, **params)
+                return True, "✅ Запрос обработан успешно"
                 
-                # Log and show the result
-                if isinstance(result, tuple) and len(result) == 2:
-                    success, message = result
-                    result_msg = f"✅ {message}" if success else f"❌ {message}"
-                else:
-                    success = True
-                    result_msg = "✅ Команда выполнена успешно"
-                
-                await self._send_message(context, result_msg)
-                
-                # Log without emojis to avoid encoding issues
-                if isinstance(result, tuple) and len(result) == 2:
-                    log_success, log_message = result
-                    logger.info(f"Command completed - Success: {log_success}, Message: {log_message}")
-                else:
-                    logger.info(f"Command completed successfully: {result}")
-                
-                return success, result_msg
-                
-            except Exception as e:
+            except json.JSONDecodeError as e:
                 error_msg = (
-                    f"❌ Ошибка при обработке команды: {str(e)}\n\n"
-                    "Пожалуйста, попробуйте снова. Если ошибка повторяется, "
-                    "сообщите об этом в поддержку."
+                    "❌ Ошибка: Некорректный формат ответа от ИИ\n\n"
+                    "Попробуйте переформулировать запрос. Если ошибка повторяется, "
+                    "возможно, возникли проблемы с подключением к сервису ИИ."
                 )
-                logger.error(f"Error in process_command: {e}", exc_info=True)
+                logger.error(f"JSON decode error: {e}")
                 await self._send_message(context, error_msg)
                 return False, error_msg
+
+        except Exception as e:
+            error_msg = (
+                f"❌ Ошибка при обработке команды: {str(e)}\n\n"
+                "Пожалуйста, попробуйте снова. Если ошибка повторяется, "
+                "сообщите об этом в поддержку."
+            )
+            try:
+                logger.error(f"Error in process_command: {e}", exc_info=True)
+            except UnicodeEncodeError:
+                safe_print(f"[ERROR] Error processing command: {str(e)}")
+                safe_print("Check the logs for more details")
+            
+            await self._send_message(context, error_msg)
+            return False, error_msg
                 
         except Exception as e:
             error_msg = (
@@ -484,19 +507,33 @@ class NLPProcessor:
             if not projects_dir.exists():
                 return True, "ℹ️ Нет созданных проектов"
                 
-            # List all directories in projects_dir that are valid projects
+            # List all directories in projects_dir
             projects = []
             for d in projects_dir.iterdir():
                 if d.is_dir() and not d.name.startswith('.'):
-                    # Check if it's a valid project by looking for config file
-                    if (d / '.project.json').exists():
-                        projects.append(d.name)
-                        
+                    projects.append({
+                        'name': d.name,
+                        'has_config': (d / '.project.json').exists(),
+                        'path': str(d.absolute())
+                    })
+            
             if not projects:
                 return True, "ℹ️ Нет созданных проектов"
                 
-            projects_list = "\n".join(f"• {name}" for name in sorted(projects))
-            return True, f"📋 Список проектов:\n{projects_list}"
+            # Sort projects by name
+            projects.sort(key=lambda x: x['name'].lower())
+            
+            # Format the response
+            response = ["📋 <b>Список проектов:</b>"]
+            for i, project in enumerate(projects, 1):
+                status = "✅" if project['has_config'] else "⚠️"
+                config_status = "" if project['has_config'] else " (без конфигурации)"
+                response.append(
+                    f"{i}. {status} <b>{project['name']}</b>{config_status}\n"
+                    f"   📁 <code>{project['path']}</code>"
+                )
+                
+            return True, "\n\n".join(response)
             
         except Exception as e:
             logger.error(f"Error listing projects: {e}", exc_info=True)
@@ -1030,37 +1067,58 @@ class NLPProcessor:
     
     async def _handle_analyze_project(self, context: ContextTypes.DEFAULT_TYPE, **kwargs) -> Tuple[bool, str]:
         """
-        Анализирует выбранный проект
+        Анализирует выбранный проект или проект по указанному пути
         
         Args:
             context: Контекст бота
-            **kwargs: Дополнительные параметры
-            
+            **kwargs: Может содержать:
+                     - project_path: Прямой путь к проекту для анализа
+                     - project_name: Имя проекта для анализа (из списка проектов)
+                     
         Returns:
             Tuple[bool, str]: Статус выполнения и сообщение с анализом
         """
         try:
             project_manager = context.bot_data.get('project_manager')
-            if not project_manager or not project_manager.current_project:
-                return False, "❌ Нет активного проекта. Сначала создайте или выберите проект."
+            if not project_manager:
+                return False, "❌ ProjectManager не инициализирован"
                 
-            project_name = project_manager.current_project
-            project_path = project_manager.get_project_path(project_name)
+            # Проверяем, передан ли прямой путь к проекту
+            project_path = kwargs.get('project_path')
+            project_name = kwargs.get('project_name')
             
-            if not project_path or not project_path.exists():
-                error_msg = f"Project directory not found: {project_path}"
-                logger.error(error_msg)
-                return False, f"❌ Директория проекта не найдена: {project_path}"
+            if project_path:
+                # Используем переданный путь
+                project_path = Path(project_path).resolve()
+                if not project_path.exists():
+                    return False, f"❌ Указанный путь не существует: {project_path}"
+                project_name = project_path.name
+                logger.info(f"Анализ проекта по пути: {project_path}")
+            elif project_name:
+                # Используем проект из списка проектов
+                project_path = project_manager.get_project_path(project_name)
+                if not project_path or not project_path.exists():
+                    return False, f"❌ Проект '{project_name}' не найден"
+                logger.info(f"Анализ проекта: {project_name} из списка проектов")
+            else:
+                # Используем текущий проект
+                if not project_manager.current_project:
+                    return False, "❌ Нет активного проекта. Укажите проект для анализа."
+                project_name = project_manager.current_project
+                project_path = project_manager.get_project_path(project_name)
+                if not project_path or not project_path.exists():
+                    return False, f"❌ Директория проекта не найдена: {project_path}"
+                logger.info(f"Анализ текущего проекта: {project_name}")
             
-            logger.info(f"Analyzing project: {project_name} at {project_path}")
+            logger.info(f"Начало анализа проекта: {project_name} по пути {project_path}")
             
-            # Initialize project analyzer
+            # Инициализация анализатора
             from core.project.analyzer import ProjectAnalyzer
             analyzer = ProjectAnalyzer(project_path)
             
-            # Analyze project
+            # Анализ проекта
             analysis = analyzer.analyze_project()
-            logger.debug(f"Project analysis result: {analysis}")
+            logger.debug(f"Результат анализа проекта: {analysis}")
             
             if 'error' in analysis:
                 error_msg = f"Ошибка при анализе проекта: {analysis['error']}"

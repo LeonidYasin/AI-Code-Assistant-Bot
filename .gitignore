@@ -1,18 +1,63 @@
 # Python
 venv/
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.mypy_cache/
 
 # Environment
 .env
 *.env.local
+.env.*.local
+!.env.example
 
 # IDE
 .vscode/
 .idea/
+*.iml
+.idea_modules/
+*.code-workspace
 
-# Логи и временные файлы
+# Logs and temporary files
 *.log
 *.tmp
+*.bak
+*.swp
+*~
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+cover/
+
+# Project specific
+bot_state.json
+projects/*
+!projects/example_project/  # Keep example project in version control
+!projects/.gitkeep
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

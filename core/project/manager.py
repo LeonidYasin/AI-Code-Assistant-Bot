@@ -37,27 +37,42 @@ class CommandType(Enum):
     UNKNOWN = "unknown"
 
 class ProjectManager:
-    def __init__(self, base_path: str = None):
+    def __init__(self, base_path: str = None, llm_enabled: bool = False):
         """
         Initialize project manager with base directory.
-        If no base_path is provided, uses current working directory.
+        
+        Args:
+            base_path: Base directory for projects. If None, uses current working directory.
+            llm_enabled: If True, enables LLM functionality. Default is False.
         """
         self.base_path = Path(base_path) if base_path else Path.cwd()
         self._current_project = None  # Always store as string (project name)
         self.projects_dir = self.base_path / "projects"
         self.projects_dir.mkdir(exist_ok=True)
+        self._llm = None
+        self._llm_enabled = llm_enabled
         self._load_config()
+        
+        # Initialize LLM operations only if explicitly enabled
+        # LLM will be loaded lazily when needed
+        self._llm_initialized = False
         
         # Load current project state if exists
         self._load_current_project()
         
-        # Initialize AI client for natural language processing
+    def _ensure_llm_initialized(self):
+        """Lazily initialize LLM if needed."""
+        if not self._llm_enabled or self._llm_initialized:
+            return
+            
         try:
-            from core.llm.client import llm_client
-            self.llm = llm_client
-        except ImportError:
-            logger.warning("LLM client not available, some features may be limited")
-            self.llm = None
+            from .llm_operations import LLMOperations
+            self._llm = LLMOperations(enabled=True)
+            self._llm_initialized = True
+            logger.info("LLM operations initialized")
+        except ImportError as e:
+            logger.warning(f"Failed to initialize LLM operations: {e}")
+            self._llm_enabled = False
             
     @property
     def current_project(self) -> Optional[str]:
@@ -140,7 +155,7 @@ class ProjectManager:
         Get path to project directory
         
         Args:
-            project_name: Optional project name. If None, uses current_project
+            project_name: Optional project name or path. If None, uses current_project
             
         Returns:
             Path object to the project directory or None if no project is selected
@@ -150,12 +165,17 @@ class ProjectManager:
             
         project_name = project_name or self.current_project
         
-        # Ensure project_name is a string
+        # If project_name is already a full path, return it as is
+        project_path = Path(project_name)
+        if project_path.is_absolute() and project_path.exists() and project_path.is_dir():
+            return project_path.resolve()
+            
+        # Otherwise, treat it as a project name in the projects directory
+        project_name = str(project_name)
         if hasattr(project_name, 'name'):  # If it's a Path object
             project_name = project_name.name
-        project_name = str(project_name)
             
-        return self.projects_dir / project_name
+        return (self.projects_dir / project_name).resolve()
         
     def validate_path(self, path: Union[str, Path], project_name: str = None) -> Tuple[bool, str]:
         """Validate that path is within project directory"""
@@ -353,24 +373,34 @@ class ProjectManager:
             logger.error(f"Error creating project: {e}")
             raise Exception(f"Failed to create project: {str(e)}")
     
-    def switch_project(self, project_name: str) -> bool:
+    def switch_project(self, project_name_or_path: str) -> bool:
         """
         Switch to an existing project and save the state
         
         Args:
-            project_name: Name of the project to switch to
+            project_name_or_path: Name of the project to switch to or direct path to project directory
             
         Returns:
             bool: True if switch was successful, False otherwise
         """
-        project_path = self.projects_dir / project_name
-        if not project_path.exists() or not (project_path / PROJECT_CONFIG).exists():
-            logger.error(f"Project {project_name} does not exist or is not a valid project")
-            return False
-            
+        # Check if the input is a direct path
+        project_path = Path(project_name_or_path).resolve()
+        
+        # If it's not a direct path, try to find it in the projects directory
+        if not project_path.exists() or not project_path.is_dir():
+            project_path = self.projects_dir / project_name_or_path
+            # Check if project exists in the projects directory
+            if not project_path.exists() or not project_path.is_dir():
+                logger.error(f"Project {project_name_or_path} does not exist or is not a valid directory")
+                return False
+                
+        # If we get here, we have a valid project path
+        project_name = project_path.name
+        
         try:
-            self.current_project = project_name
-            self.config['current_project'] = project_name
+            # Store the full path as the current project
+            self.current_project = str(project_path)
+            self.config['current_project'] = str(project_path)
             
             # Save to config file
             if not self._save_config():
@@ -380,11 +410,11 @@ class ProjectManager:
             if not self._save_current_project():
                 logger.warning("Failed to save project state")
                 
-            logger.info(f"Switched to project: {project_name}")
+            logger.info(f"Switched to project: {project_name} at {project_path}")
             return True
             
         except Exception as e:
-            logger.error(f"Error switching to project {project_name}: {e}")
+            logger.error(f"Error switching to project {project_name_or_path}: {e}")
             return False
         
     def list_projects(self) -> Tuple[bool, Union[str, List[Dict[str, Any]]]]:
@@ -395,56 +425,99 @@ class ProjectManager:
                 - bool: Success status (True if successful, False if error)
                 - Union[str, List[Dict]]: Error message if failed, or list of projects if successful
         """
+        logger.debug("list_projects called")
+        logger.debug(f"Projects directory: {self.projects_dir.absolute()}")
+        
         try:
             projects = []
-            logger.debug(f"Looking for projects in: {self.projects_dir}")
             
             if not self.projects_dir.exists():
                 logger.debug(f"Creating projects directory: {self.projects_dir}")
                 self.projects_dir.mkdir(parents=True, exist_ok=True)
                 return True, projects
-                
-            for item in self.projects_dir.iterdir():
-                if item.is_dir() and (item / PROJECT_CONFIG).exists():
-                    logger.debug(f"Found project directory with config: {item}")
+            
+            # List all directories
+            all_dirs = [d for d in self.projects_dir.iterdir() if d.is_dir()]
+            logger.debug(f"Found {len(all_dirs)} project directories")
+            
+            for item in all_dirs:
+                try:
+                    config_path = item / PROJECT_CONFIG
+                    created_at = 'Unknown'
+                    has_config = config_path.exists()
+                    
+                    # Try to read project config if it exists
+                    if has_config:
+                        try:
+                            with open(config_path, 'r', encoding='utf-8') as f:
+                                config = json.load(f)
+                                created_at = config.get('created_at', 'Unknown')
+                        except Exception as e:
+                            logger.warning(f"Error reading project config for {item.name}: {e}")
+                    
+                    # Calculate directory size and count files
                     try:
-                        config_path = item / PROJECT_CONFIG
-                        
-                        # Get project config
-                        with open(config_path, 'r', encoding='utf-8') as f:
-                            config = json.load(f)
-                        
-                        # Calculate directory size
                         total_size = sum(f.stat().st_size for f in item.glob('**/*') if f.is_file())
+                        file_count = sum(1 for f in item.glob('**/*') 
+                                       if f.is_file() and not any(part.startswith('.') for part in f.parts))
                         
-                        # Count files
-                        file_count = sum(1 for _ in item.glob('**/*') if _.is_file() and _.name != PROJECT_CONFIG)
+                        # Handle current project detection
+                        is_current = False
+                        if self.current_project:
+                            current_path = Path(self.current_project) if isinstance(self.current_project, str) else self.current_project
+                            if hasattr(current_path, 'absolute'):
+                                is_current = str(current_path.absolute()) == str(item.absolute())
+                            else:
+                                is_current = str(current_path) == str(item.absolute())
                         
                         project_data = {
                             'name': item.name,
                             'path': str(item.absolute()),
-                            'created_at': config.get('created_at', 'Unknown'),
+                            'created_at': created_at,
                             'size': self._format_size(total_size),
                             'file_count': file_count,
-                            'is_current': self.current_project and str(self.current_project.absolute()) == str(item.absolute())
+                            'is_current': is_current,
+                            'has_config': has_config
                         }
+                        
                         projects.append(project_data)
                         
                     except Exception as e:
-                        error_msg = f"Error reading project {item.name}: {str(e)}"
+                        error_msg = f"Error processing size/count for {item.name}"
                         logger.error(error_msg, exc_info=True)
                         projects.append({
                             'name': item.name,
                             'path': str(item.absolute()),
-                            'error': str(e)
+                            'error': str(e),
+                            'has_config': has_config
                         })
+                        
+                except Exception as e:
+                    error_msg = f"Error processing project {item.name}: {str(e)}"
+                    logger.error(error_msg, exc_info=True)
+                    print(f"  {error_msg}")
+                    projects.append({
+                        'name': item.name,
+                        'path': str(item.absolute()),
+                        'error': str(e),
+                        'has_config': False
+                    })
             
             # Sort projects by name
-            return True, sorted(projects, key=lambda x: x['name'])
+            sorted_projects = sorted(projects, key=lambda x: x['name'].lower())
+            print(f"\nTotal projects to return: {len(sorted_projects)}")
+            for i, p in enumerate(sorted_projects, 1):
+                print(f"  {i}. {p['name']} (has_config: {p.get('has_config', False)})")
+            print("="*50 + "\n")
+            
+            return True, sorted_projects
             
         except Exception as e:
             error_msg = f"Error listing projects: {str(e)}"
             logger.error(error_msg, exc_info=True)
+            print(f"[ERROR] {error_msg}")
+            import traceback
+            traceback.print_exc()
             return False, error_msg
         
     def _format_size(self, size_bytes: int) -> str:
@@ -457,22 +530,26 @@ class ProjectManager:
         
     def get_project_info(self) -> Dict[str, Any]:
         """Get information about the current project"""
-        if not self.current_project or not self.current_project.exists():
+        if not self.current_project:
             return {}
             
         try:
-            with open(self.current_project / PROJECT_CONFIG, 'r', encoding='utf-8') as f:
+            current_path = Path(self.current_project)
+            if not current_path.exists():
+                return {'error': 'Current project path does not exist'}
+                
+            with open(current_path / PROJECT_CONFIG, 'r', encoding='utf-8') as f:
                 project_config = json.load(f)
                 
             # Count files in project
-            file_count = sum(1 for _ in self.current_project.rglob('*') if _.is_file() and _.name != PROJECT_CONFIG)
+            file_count = sum(1 for _ in current_path.rglob('*') if _.is_file() and _.name != PROJECT_CONFIG)
             
             return {
                 'name': project_config.get('name', 'Unnamed Project'),
-                'path': str(self.current_project),
+                'path': str(current_path),
                 'created_at': project_config.get('created_at', 'Unknown'),
                 'file_count': file_count,
-                'current_project': self.current_project.name
+                'current_project': current_path.name
             }
             
         except Exception as e:

@@ -15,7 +15,7 @@ from .file_handlers import FileHandler
 from .code_handlers import CodeHandler
 
 # Import additional handlers
-from .project_handlers import register_project_handlers
+from .project_handlers import register_project_handlers, ProjectHandlers
 from .message_handler import handle_message
 
 # List of handler classes to register
@@ -55,11 +55,20 @@ async def register_handlers(bot: BotApplication) -> None:
         from core.project.manager import ProjectManager
         project_manager = ProjectManager()
     
-    # Initialize LLM client if not already done
-    if llm_client is None:
-        from core.llm.client import llm_client as llm
-        llm.initialize(use_gigachat=True)
-        llm_client = llm
+    # Create a callable that initializes the LLM client only when needed
+    def get_llm_client():
+        global llm_client
+        if llm_client is None:
+            logger.info("Initializing LLM client...")
+            from core.llm.client import llm_client as llm
+            llm.initialize(use_gigachat=True)
+            llm_client = llm
+            if llm_client is None:
+                logger.warning("LLM client initialization failed, some features will be disabled")
+        return llm_client
+    
+    # Initialize handlers with a callable that will initialize LLM client when needed
+    project_handlers = ProjectHandlers(get_llm_client)
     
     # Store instances in bot_data for later use (only if we have an app)
     if hasattr(bot, 'app') and bot.app is not None:

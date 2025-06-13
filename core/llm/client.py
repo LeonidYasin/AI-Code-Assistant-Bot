@@ -1,3 +1,4 @@
+import sys
 from typing import Optional, Dict, Any, List, Union
 from langchain_core.language_models import BaseLLM
 from config import settings
@@ -155,49 +156,94 @@ class LLMClient:
                     logger.debug(f"Using model: {self._model._client.model}")
                 
                 # Generate the response
+                logger.debug("Generating response from model...")
                 result = self._model.generate([full_prompt])
                 
                 # Handle the response - extract text from the result
                 try:
                     response = ""
+                    logger.debug(f"Raw result type: {type(result).__name__}")
                     
                     # First, try to get the raw response from the model
                     if hasattr(result, 'generations') and result.generations:
                         generations = result.generations
+                        logger.debug(f"Got {len(generations)} generations")
+                        
                         if generations and len(generations) > 0 and len(generations[0]) > 0:
                             generation = generations[0][0]
+                            logger.debug(f"Generation type: {type(generation).__name__}")
                             
                             # Handle different response formats
                             if hasattr(generation, 'text'):
                                 response = generation.text
+                                logger.debug(f"Got text from generation: {response[:200]}...")
                             elif hasattr(generation, 'message'):
                                 # Handle AIMessage object
                                 message = generation.message
+                                logger.debug(f"Message type: {type(message).__name__}")
+                                
                                 if hasattr(message, 'content'):
                                     response = message.content
+                                    logger.debug(f"Got content from message: {response[:200]}...")
                                 elif hasattr(message, 'response_metadata') and 'content' in message.response_metadata:
                                     response = message.response_metadata['content']
+                                    logger.debug(f"Got content from response_metadata: {response[:200]}...")
                                 else:
                                     response = str(message)
+                                    logger.debug(f"Falling back to string representation: {response[:200]}...")
                             else:
                                 response = str(generation)
+                                logger.debug(f"Using string representation of generation: {response[:200]}...")
                                     
                             # If the response is a string representation of an object, try to extract content
-                            if response.startswith("content='") and "' additional_kwargs=" in response:
+                            if isinstance(response, str) and "content='" in response and "' additional_kwargs=" in response:
                                 try:
+                                    logger.debug("Found content=' pattern in response, attempting to extract...")
                                     # Extract the content part
                                     content_start = response.find("content='") + len("content='")
                                     content_end = response.find("'", content_start)
                                     if content_end > content_start:
                                         response = response[content_start:content_end]
+                                        logger.debug(f"Extracted content: {response[:200]}...")
+                                        
                                         # Unescape any escaped characters
-                                        response = response.encode().decode('unicode_escape')
+                                        try:
+                                            response = response.encode().decode('unicode_escape')
+                                            logger.debug("Successfully unescaped content")
+                                        except Exception as e:
+                                            logger.warning(f"Failed to unescape content: {str(e)}")
+                                            
                                         # Extract JSON if present
                                         if '```json' in response:
-                                            json_start = response.find('```json\n') + 7
-                                            json_end = response.find('\n```', json_start)
-                                            if json_end > json_start:
-                                                response = response[json_start:json_end].strip()
+                                            logger.debug("Found ```json marker, attempting to extract JSON...")
+                                            json_start = response.find('```json\n')
+                                            if json_start >= 0:
+                                                json_start += 7  # Length of '```json\n'
+                                                json_end = response.find('\n```', json_start)
+                                                if json_end > json_start:
+                                                    json_str = response[json_start:json_end].strip()
+                                                    logger.debug(f"Extracted JSON: {json_str[:200]}...")
+                                                    # Validate it's valid JSON
+                                                    try:
+                                                        json.loads(json_str)
+                                                        response = json_str
+                                                        logger.debug("Successfully parsed extracted JSON")
+                                                    except json.JSONDecodeError as e:
+                                                        logger.warning(f"Extracted content is not valid JSON: {str(e)}")
+                                                        # Try to fix common JSON issues
+                                                        try:
+                                                            # Try to find the first { and last }
+                                                            start = json_str.find('{')
+                                                            end = json_str.rfind('}') + 1
+                                                            if start >= 0 and end > start:
+                                                                fixed_json = json_str[start:end]
+                                                                json.loads(fixed_json)  # Validate
+                                                                response = fixed_json
+                                                                logger.debug("Successfully fixed and parsed JSON")
+                                                        except Exception as fix_error:
+                                                            logger.warning(f"Failed to fix JSON: {str(fix_error)}")
+                                except Exception as extract_error:
+                                    logger.error(f"Error extracting content: {str(extract_error)}", exc_info=True)
                                 except Exception as e:
                                     logger.warning(f"Error parsing response content: {e}")
                     
@@ -283,16 +329,51 @@ class LLMClient:
                     logger.info(f"Retrying... (attempt {attempt + 2} of {retry_count})")
                     continue
         
-        # If we get here, all attempts failed
-        error_message = self._get_error_message(last_error)
-        logger.error(f"LLM call failed after {retry_count} attempts. Last error: {last_error}")
-        return error_message
 
-# Global instance
-llm_client = LLMClient()
+# Global instance with lazy initialization
+class LazyLLMClient:
+    _instance = None
+    _initialized = False
+    
+    def __init__(self):
+        if LazyLLMClient._instance is not None:
+            raise RuntimeError("Use get_instance() instead")
+        self._client = None
+        self._initialized = False
+    
+    @classmethod
+    def get_instance(cls) -> 'LazyLLMClient':
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+    
+    def _ensure_initialized(self):
+        """Ensure the client is initialized only when needed."""
+        # Skip initialization if running in CLI mode
+        if '--cli' in sys.argv or '--help' in sys.argv or '--version' in sys.argv:
+            return False
+            
+        if not self._initialized:
+            logger.debug("Lazily initializing LLM client")
+            self._client = LLMClient()
+            self._initialized = True
+            
+        return self._initialized
+    
+    def __getattr__(self, name):
+        # Only initialize the client if the attribute is actually accessed
+        if name not in ['_client', '_initialized'] and self._ensure_initialized():
+            return getattr(self._client, name)
+        raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
 
-# Initialize with Gigachat by default
-try:
-    llm_client.initialize(use_gigachat=True)
-except Exception as e:
-    logger.error(f"Failed to initialize LLM client: {e}")
+# Global instance with lazy initialization
+llm_client = LazyLLMClient.get_instance()
+
+# Only initialize if not in CLI mode
+if '--cli' not in sys.argv and '--help' not in sys.argv and '--version' not in sys.argv:
+    try:
+        # Try to initialize the client to check for errors
+        llm_client.initialize()
+    except Exception as e:
+        logger.error(f"Failed to initialize LLM client: {e}")
+        raise

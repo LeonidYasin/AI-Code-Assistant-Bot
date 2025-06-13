@@ -3,8 +3,10 @@ import asyncio
 import json
 import logging
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
+from telegram import Update as TelegramUpdate
 
 from telegram import Update, User, Chat, Bot, Message
 from telegram.ext import ContextTypes, CallbackContext
@@ -279,7 +281,17 @@ class CommandProcessor:
                     context = self._cli_context
                 
                 # Process the natural language command
+                print("\n[DEBUG] Forwarding to NLP processor:")
+                print(f"Command: {command_text}")
+                print(f"Context: {context.__class__.__name__}")
+                
                 success, response = await nlp_processor.process_command(command_text, context)
+                
+                print("\n[DEBUG] NLP processor response:")
+                print(f"Success: {success}")
+                print(f"Response type: {type(response)}")
+                print(f"Response preview: {str(response)[:200]}..." if response and len(str(response)) > 200 else f"Response: {response}")
+                
                 return success, response
                 
             except Exception as e:
@@ -306,6 +318,84 @@ class CommandProcessor:
                 if subcommand.lower() == 'list':
                     # Special handling for project list command
                     command_text = "/project list"
+        
+        # Special handling for analyze_project with direct path
+        if command == 'analyze_project':
+            from pathlib import Path
+            from core.project.analyzer import ProjectAnalyzer
+            from handlers.commands import _format_structure, _format_size
+            
+            # Get the path argument (join all parts after the command)
+            path_arg = ' '.join(parts[1:]).strip() if len(parts) > 1 else ''
+            
+            # If no arguments, use the current project
+            if not path_arg:
+                if not context.bot_data.get('project_manager'):
+                    return False, "❌ Менеджер проектов не инициализирован"
+                    
+                project_path = context.bot_data['project_manager'].get_project_path()
+                if not project_path or not project_path.exists():
+                    return False, "❌ Текущий проект не выбран или не существует"
+                    
+                project_name = project_path.name
+            else:
+                # Handle both relative and absolute paths
+                project_path = Path(path_arg).resolve()
+                project_name = project_path.name
+                
+                # Check if path exists and is a directory
+                if not project_path.exists():
+                    return False, f"❌ Путь не существует: {project_path}"
+                if not project_path.is_dir():
+                    return False, f"❌ Указанный путь не является директорией: {project_path}"
+            
+            try:
+                # Analyze the project
+                analyzer = ProjectAnalyzer(project_path)
+                analysis = analyzer.analyze_project()
+                
+                if 'error' in analysis:
+                    return False, f"❌ Ошибка при анализе: {analysis['error']}"
+                
+                # Format the response
+                response = [
+                    f"📊 *Анализ проекта: {project_name}*",
+                    f"📂 Путь: `{project_path}`\n"
+                ]
+                
+                # Add statistics if available
+                stats = analysis.get('stats', {})
+                if stats:
+                    response.extend([
+                        "*📊 Статистика:*",
+                        f"• Всего файлов: {stats.get('total_files', 0)}",
+                        f"• Общий размер: {_format_size(stats.get('total_size', 0))}",
+                        f"• Количество директорий: {stats.get('dir_count', 0)}"
+                    ])
+                
+                # Add project structure if available
+                if 'structure' in analysis and analysis['structure']:
+                    response.append("\n*📁 Структура проекта:*")
+                    response.append(_format_structure(analysis['structure']))
+                
+                # Add summary if available
+                if 'summary' in analysis and analysis['summary']:
+                    response.append("\n*📝 Краткое описание:*")
+                    response.append(analysis['summary'])
+                
+                # Add recommendations if available
+                if 'recommendations' in analysis and analysis['recommendations']:
+                    response.append("\n*💡 Рекомендации:*")
+                    for i, rec in enumerate(analysis['recommendations'], 1):
+                        response.append(f"{i}. {rec}")
+                
+                # Join all parts with newlines
+                full_response = "\n".join(response)
+                return True, full_response
+                
+            except Exception as e:
+                logger.error(f"Error analyzing project: {e}", exc_info=True)
+                return False, f"❌ Ошибка при анализе проекта: {str(e)}"
         
         # Initialize bot_data if not present
         if context is not None and not hasattr(context, 'bot_data'):
@@ -478,7 +568,17 @@ class CommandProcessor:
         Returns:
             None - Command handlers are responsible for sending their own responses
         """
-        from telegram import Update as TelegramUpdate
+        print("\n" + "="*50)
+        print("[DEBUG] _execute_command")
+        print("-"*50)
+        print(f"Command: {command}")
+        print(f"Full command: {command_text}")
+        print(f"Chat ID: {chat_id}")
+        print(f"CLI Mode: {cli_mode}")
+        print(f"Context type: {type(context).__name__ if context else 'None'}")
+        if context and hasattr(context, 'bot_data'):
+            print(f"Bot data keys: {list(context.bot_data.keys()) if hasattr(context, 'bot_data') else 'N/A'}")
+        print("="*50 + "\n")
         
         # Debug output
         print("\n" + "="*50)
@@ -515,20 +615,23 @@ class CommandProcessor:
         else:
             print(f"No handler found for command: {command}")
         
-        # Create message with custom reply_text for CLI mode
-        class CLIMessage(Message):
-            def __init__(self, *args, **kwargs):
-                super().__init__(*args, **kwargs)
+        # Create a simple message class for CLI mode
+        class CLIMessage:
+            def __init__(self, message_id, date, chat, from_user, text, **kwargs):
+                self.message_id = message_id
+                self.date = date
+                self._chat = chat
+                self._from_user = from_user
+                self._text = text
                 self._bot = None
-                self._text = command_text
-                self.chat = chat
-                self.from_user = user
                 
-            async def reply_text(self, text, **kwargs):
-                print("\n[CLI RESPONSE]" + "="*40)
-                print(text)
-                print("="*48 + "\n")
-                return self
+            @property
+            def chat(self):
+                return self._chat
+                
+            @property
+            def from_user(self):
+                return self._from_user
                 
             @property
             def text(self):
@@ -537,93 +640,77 @@ class CommandProcessor:
             @text.setter
             def text(self, value):
                 self._text = value
+                
+            async def reply_text(self, text, **kwargs):
+                print("\n[CLI RESPONSE]" + "="*40)
+                print(text)
+                print("="*48 + "\n")
+                return self
         
         # Create a minimal Update object
         message = CLIMessage(
             message_id=0,
-            date=None,
+            date=datetime.now(),
             chat=chat,
-            text=command_text,
-            from_user=user
+            from_user=user,
+            text=command_text
         )
         
         # Set bot instance if available
         if hasattr(self.app, 'bot'):
             message._bot = self.app.bot
-        
-        # Create update and context
+            
+        # Create a minimal Update object
         update = TelegramUpdate(update_id=0, message=message)
         
-        # Create a custom context class to handle our needs
-        class CustomContext(CallbackContext):
-            def __init__(self, *args, **kwargs):
-                super().__init__(*args, **kwargs)
-                self._bot_data = context_bot_data
-                self._chat_data = {}
-                self._user_data = {}
-                self.command_processor = self
-                self.active_project = context_bot_data.get('active_project', {})
+        # Create a context object
+        context = self._create_fake_context()
+        
+        # Set bot data
+        if not hasattr(context, 'bot_data'):
+            context.bot_data = {}
             
-            @property
-            def bot_data(self):
-                return self._bot_data
-                
-            @bot_data.setter
-            def bot_data(self, value):
-                self._bot_data = value
+        # Initialize project manager in bot_data if not exists
+        if 'project_manager' not in context.bot_data:
+            from core.project.manager import ProjectManager
+            context.bot_data['project_manager'] = ProjectManager()
             
-            @property
-            def chat_data(self):
-                return self._chat_data
-                
-            @property
-            def user_data(self):
-                return self._user_data
+        # Set active projects if not exists
+        if 'active_projects' not in context.bot_data:
+            context.bot_data['active_projects'] = {}
+            
+        # Set current chat in active projects if not exists
+        if chat.id not in context.bot_data['active_projects']:
+            context.bot_data['active_projects'][chat.id] = None
+            
+        # Set current project if not set
+        if context.bot_data['active_projects'][chat.id] is None and hasattr(self.app, 'project_manager'):
+            context.bot_data['active_projects'][chat.id] = self.app.project_manager.current_project
+            
+        # Set project manager in context for backward compatibility
+        context.bot_data['project_manager'] = context.bot_data.get('project_manager')
         
-        # Initialize the context
-        context = CustomContext.from_update(update, self.app)
+        # Set project_handlers if not exists
+        if 'project_handlers' not in context.bot_data:
+            from handlers.project_handlers import ProjectHandlers
+            context.bot_data['project_handlers'] = ProjectHandlers()
+            
+        # Set project_handlers in context for backward compatibility
+        context.bot_data['project_handlers'] = context.bot_data.get('project_handlers')
         
-        # Debug output
-        print("\n[DEBUG] Context initialized with bot_data:")
-        print(f"Active projects: {context_bot_data.get('active_project', {})}")
-        print(f"Project states: {context_bot_data.get('project_states', {})}")
+        # Set the context's bot_data to itself to ensure it's available in handlers
+        context._bot_data = context.bot_data
         
-        # Execute the command
+        # Execute the command handler
         try:
-            # Save the current state before executing the command
-            prev_active_project = self._active_projects.get(chat_id)
-            
-            # Execute the command
-            await self.app._commands[command](update, context)
-            
-            # After command execution, update our internal state with any changes
-            if hasattr(context, 'active_project') and chat_id in context.active_project:
-                new_active_project = context.active_project[chat_id]
-                if new_active_project != prev_active_project:
-                    self._active_projects[chat_id] = new_active_project
-                    print(f"\n[DEBUG] Updated active project for chat {chat_id} to: {new_active_project}")
-            
-            # Also sync back any changes from bot_data
-            if hasattr(context, 'bot_data') and context.bot_data:
-                if 'active_project' in context.bot_data and chat_id in context.bot_data['active_project']:
-                    self._active_projects[chat_id] = context.bot_data['active_project'][chat_id]
-            
-            # Save state after each command
-            self._save_state()
-            
+            handler = self.app._commands[command]
+            await handler(update, context)
+            return True
         except Exception as e:
-            error_msg = f"❌ Ошибка при выполнении команды: {str(e)}"
-            logger.error(f"Error processing command '{command_text}': {e}", exc_info=True)
-            
-            # Debug: Print current state after error
-            print("\n[DEBUG] After error:")
-            print(f"app.bot_data.active_project: {getattr(self.app, 'bot_data', {}).get('active_project', 'N/A')}")
-            if hasattr(context, 'active_project'):
-                print(f"context.active_project: {getattr(context, 'active_project', 'N/A')}")
-            
-            # Re-raise the exception to be handled by the caller
-            raise
-    
+            logger.error(f"Error executing command handler: {e}", exc_info=True)
+            print(f"\n[ERROR] {str(e)}\n")
+            return False
+
     async def _send_response(self, chat_id: int, text: str) -> None:
         """Send a response to the specified chat or print to console."""
         if chat_id is None:
