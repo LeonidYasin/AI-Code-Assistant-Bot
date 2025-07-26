@@ -260,8 +260,8 @@ File Operations:
   file view <path>      View contents of a file
 
 Code Analysis:
-  analyze project       Run a full analysis of the current project
-  analyze file <path>   Analyze a specific file
+  analyze <file>        Analyze a specific file with AI
+  chat [--model <m>]    Start interactive AI chat session
   metrics               Show code metrics for the current project
 
 Development Tools:
@@ -278,5 +278,6 @@ Examples:
   python main.py project create my_new_project
   python main.py project switch my_project
   python main.py file list
-  python main.py analyze project
+  python main.py analyze main.py
+  python main.py chat --model gigachat
 """.strip()

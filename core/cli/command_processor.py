@@ -59,6 +59,8 @@ def process_cli_command(bot=None) -> int:
             return _run_analyze()
         if command == "switch-model":
             return _run_switch_model()
+        if command == "chat":
+            return _run_chat()
 
         # Handle help command
         if command in ('help', '--help', '-h'):
@@ -172,6 +174,27 @@ async def _async_analyze(path: str, model: str):
     result = await ask(messages)
     print(result)
 
+async def _async_analyze_wrapper(path: str, model: str) -> int:
+    """Wrapper for async analyze that returns exit code."""
+    try:
+        os.environ["PROVIDER"] = model
+        print(f"🔍 Анализирую файл: {path}")
+        print(f"🤖 Используя модель: {model}")
+        
+        with open(path, encoding="utf-8") as f:
+            code = f.read()
+        
+        messages = [{"role": "user", "content": f"Проанализируй код:\n{code}"}]
+        result = await ask(messages)
+        print("\n" + "="*50)
+        print("📊 РЕЗУЛЬТАТ АНАЛИЗА:")
+        print("="*50)
+        print(result)
+        return 0
+    except Exception as e:
+        print(f"❌ Ошибка при анализе: {e}")
+        return 1
+
 
 def _run_switch_model() -> int:
     """python main.py switch-model <provider>"""
@@ -183,6 +206,28 @@ def _run_switch_model() -> int:
     print(f"✅ Для переключения на {provider} отредактируй .env:")
     print(f"   PROVIDER={provider}")
     return 0
+
+def _run_chat() -> int:
+    """python main.py chat [--model <provider>]"""
+    import subprocess
+    
+    # Prepare command
+    cmd = ["python3", "ai_chat.py"]
+    
+    # Check for model argument
+    if "--model" in sys.argv:
+        idx = sys.argv.index("--model")
+        if idx + 1 < len(sys.argv):
+            model = sys.argv[idx + 1]
+            cmd.extend(["--model", model])
+    
+    # Run the chat
+    try:
+        result = subprocess.run(cmd, cwd=".")
+        return result.returncode
+    except Exception as e:
+        print(f"❌ Ошибка запуска чата: {e}")
+        return 1
 
 
 # ---------- существующая async-версия ----------
@@ -283,6 +328,21 @@ async def process_async_cli_command(bot=None) -> int:
             else:
                 print(f"\n❌ Unknown project subcommand: {subcommand}")
                 return 1
+
+        # Handle analyze command
+        if command == 'analyze':
+            if len(sys.argv) < 3:
+                print("Usage: python main.py analyze <file_or_dir> [--model deepseek|kimi|gigachat]")
+                return 1
+
+            path = sys.argv[2]
+            model = "hf_deepseek"
+            if "--model" in sys.argv:
+                idx = sys.argv.index("--model")
+                if idx + 1 < len(sys.argv):
+                    model = sys.argv[idx + 1]
+
+            return await _async_analyze_wrapper(path, model)
 
         # If we get here, the command wasn't recognized
         print("\n❌ Unknown command. Use --help for usage information.")
