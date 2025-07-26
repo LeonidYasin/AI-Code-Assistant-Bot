@@ -1,4 +1,9 @@
 providers:
+  mock:
+    class: adapters.mock.MockAdapter
+    env: []
+    default_model: demo
+
   hf_deepseek:
     class: adapters.hf_deepseek.HFDeepSeekAdapter
     env:
