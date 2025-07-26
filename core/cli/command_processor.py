@@ -110,6 +110,32 @@ def process_cli_command(bot=None) -> int:
                 print(f"\n❌ Unknown project subcommand: {subcommand}")
                 return 1
 
+        # Handle file subcommands
+        if command == 'file' and len(sys.argv) > 2:
+            subcommand = sys.argv[2].lower()
+
+            if subcommand == 'list':
+                path = sys.argv[3] if len(sys.argv) > 3 else "."
+                success, result = handler.handle_file_list(path)
+                print(f"\n{result}")
+                return 0 if success else 1
+
+            elif subcommand == 'view' and len(sys.argv) > 3:
+                file_path = sys.argv[3]
+                success, result = handler.handle_file_view(file_path)
+                print(f"\n{result}")
+                return 0 if success else 1
+
+            elif subcommand == 'create' and len(sys.argv) > 3:
+                file_path = sys.argv[3]
+                success, result = handler.handle_file_create(file_path)
+                print(f"\n{result}")
+                return 0 if success else 1
+
+            else:
+                print(f"\n❌ Unknown file subcommand: {subcommand}")
+                return 1
+
         # If we get here, the command wasn't recognized
         print("\n❌ Unknown command. Use --help for usage information.")
         return 1

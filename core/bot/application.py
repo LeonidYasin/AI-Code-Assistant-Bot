@@ -224,3 +224,23 @@ class BotApplication:
             await self.app.stop()
             await self.app.shutdown()
             await self.app.bot.delete_webhook()
+
+    def run(self, use_webhook: bool = False, webhook_url: str = None) -> None:
+        """Run the bot application.
+        
+        Args:
+            use_webhook: If True, use webhook mode instead of polling.
+            webhook_url: The webhook URL (required if use_webhook=True).
+        """
+        try:
+            if use_webhook:
+                if not webhook_url:
+                    raise ValueError("webhook_url is required when use_webhook=True")
+                asyncio.run(self.run_webhook(webhook_url))
+            else:
+                asyncio.run(self.run_polling())
+        except KeyboardInterrupt:
+            logger.info("Bot stopped by user")
+        except Exception as e:
+            logger.error(f"Error running bot: {e}", exc_info=True)
+            raise

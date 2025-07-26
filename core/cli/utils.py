@@ -15,7 +15,12 @@ def is_cli_command() -> bool:
         '--version', '-v', 'version',
         'list_project', '/list_project',
         'list_projects', '/list_projects',
-        'project'
+        'project',
+        'file',
+        'analyze',
+        'run',
+        'python',
+        'install'
     ]
     
     return any(cmd in ' '.join(sys.argv).lower() for cmd in cli_commands)
@@ -33,6 +38,11 @@ def is_simple_project_command() -> bool:
             return False
         subcommand = sys.argv[2].lower()
         return subcommand in ['list', 'switch', 'create', 'info']
+    elif command == 'file':
+        if len(sys.argv) < 3:
+            return False
+        subcommand = sys.argv[2].lower()
+        return subcommand in ['list', 'view', 'create']
     elif command == 'list_project' or command == '/list_project':
         return True
     return False
