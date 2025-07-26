@@ -11,6 +11,8 @@ if [ $# -eq 0 ]; then
     echo "  ./run.sh help                    # Показать справку"
     echo "  ./run.sh project list           # Список проектов"
     echo "  ./run.sh file list              # Список файлов"
+    echo "  ./run.sh chat                    # AI чат ассистент"
+    echo "  ./run.sh analyze main.py        # Анализ файла с AI"
     echo "  ./run.sh bot                     # Запустить Telegram бота"
     echo ""
     echo "Или используйте напрямую:"

@@ -18,6 +18,7 @@ def is_cli_command() -> bool:
         'project',
         'file',
         'analyze',
+        'chat',
         'run',
         'python',
         'install'
@@ -45,6 +46,8 @@ def is_simple_project_command() -> bool:
         return subcommand in ['list', 'view', 'create']
     elif command == 'list_project' or command == '/list_project':
         return True
+    elif command == 'analyze':
+        return False  # analyze требует AI и должна обрабатываться асинхронно
     return False
 
 def format_project_list(projects: List[Dict[str, Any]]) -> str:
