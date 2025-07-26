@@ -8,7 +8,7 @@ class HFDeepSeekAdapter:
         self.model = model or os.getenv("HF_MODEL", "deepseek-ai/DeepSeek-Coder-V2-Instruct")
 
     async def ask(self, messages: List[Dict[str, str]]) -> str:
-        url = f"https://api-inference.huggingface.co/models/{self.model}/v1/chat/completions"
+        url = "https://router.huggingface.co/v1/chat/completions"
         headers = {"Authorization": f"Bearer {self.token}"}
         payload = {"model": self.model, "messages": messages, "max_tokens": 1024, "temperature": 0.3}
         async with httpx.AsyncClient(timeout=120) as client:

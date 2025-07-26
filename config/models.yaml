@@ -9,7 +9,7 @@ providers:
     env:
       - HF_TOKEN
       - HF_MODEL
-    default_model: deepseek-ai/DeepSeek-Coder-V2-Instruct
+    default_model: Qwen/Qwen1.5-72B-Chat
 
   kimi:
     class: adapters.kimi.KimiAdapter
