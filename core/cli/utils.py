@@ -48,6 +48,8 @@ def is_simple_project_command() -> bool:
         return True
     elif command == 'analyze':
         return False  # analyze требует AI и должна обрабатываться асинхронно
+    elif command == 'chat':
+        return True  # chat запускает отдельный процесс
     return False
 
 def format_project_list(projects: List[Dict[str, Any]]) -> str:
