@@ -5,7 +5,7 @@ from telegram.ext import CallbackContext, ContextTypes, BaseHandler
 
 # Type aliases
 HandlerType = Union[
-    BaseHandler[Update, CallbackContext],
+    BaseHandler,
     Callable[[Update, CallbackContext], Awaitable[None]]
 ]
 
