@@ -33,3 +33,7 @@ psutil>=5.9.0
 
 # Для работы с асинхронными HTTP-запросами
 aiohttp>=3.8.4
+
+# --- Multi-LLM support ---
+openai>=1.0
+huggingface-hub>=0.19

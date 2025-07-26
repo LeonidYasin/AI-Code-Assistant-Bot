@@ -1,0 +1,19 @@
+providers:
+  hf_deepseek:
+    class: adapters.hf_deepseek.HFDeepSeekAdapter
+    env:
+      - HF_TOKEN
+      - HF_MODEL
+    default_model: deepseek-ai/DeepSeek-Coder-V2-Instruct
+
+  kimi:
+    class: adapters.kimi.KimiAdapter
+    env:
+      - KIMI_API_KEY
+    default_model: moonshot-v1-8k
+
+  gigachat:
+    class: adapters.gigachat.GigaChatAdapter
+    env:
+      - GIGACHAT_API_KEY
+    default_model: GigaChat-Pro
