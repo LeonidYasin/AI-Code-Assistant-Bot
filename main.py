@@ -92,4 +92,9 @@ def main():
         return 1
 
 if __name__ == "__main__":
-    sys.exit(run())
+    import sys
+    if len(sys.argv) >= 2 and sys.argv[1] in ("analyze", "switch-model"):
+        sys.exit(process_cli_command())
+    else:
+        import asyncio
+        sys.exit(asyncio.run(process_async_cli_command()))
