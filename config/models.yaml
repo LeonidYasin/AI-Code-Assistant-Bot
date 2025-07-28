@@ -22,3 +22,9 @@ providers:
     env:
       - GIGACHAT_API_KEY
     default_model: GigaChat-Pro
+
+models:
+  hf_openai:
+    adapter: hf_openai
+    default_model: deepseek-ai/deepseek-coder-6.7b-instruct
+    env: HF_TOKEN

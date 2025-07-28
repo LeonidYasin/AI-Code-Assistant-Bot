@@ -5,7 +5,7 @@ from rich.panel import Panel
 from rich.markdown import Markdown
 
 class DeepSeekChat:
-    def __init__(self, model="deepseek-ai/DeepSeek-V3-0324"):
+    def __init__(self, model="moonshotai/Kimi-K2-Instruct"):
         self.client = InferenceClient()
         self.model = model
         self.console = Console()
